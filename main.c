@@ -22,10 +22,10 @@ void scalar_mul_adjoint(AD_Graph_Vertex** input, AD_Graph_Vertex** output) {
         return;
     }
     if (dx0 != NULL) {
-        *dx0 = (*dy) * (*x1);
+        *dx0 += (*dy) * (*x1);
     }
     if (dx1 != NULL) {
-        *dx1 = (*dy) * (*x0);
+        *dx1 += (*dy) * (*x0);
     }
 }
 
@@ -34,58 +34,29 @@ int main(void) {
     // Create a new graph
     AD_Graph* g = AD_Graph_new();
     
-    // Add four vertices to the graph
-    size_t x = AD_Graph_add_vertex(g, AD_Graph_Vertex_new(sizeof(double), sizeof(double)));
-    size_t y = AD_Graph_add_vertex(g, AD_Graph_Vertex_new(sizeof(double), sizeof(double)));
-    size_t z = AD_Graph_add_vertex(g, AD_Graph_Vertex_new(sizeof(double), sizeof(double)));
-    size_t w = AD_Graph_add_vertex(g, AD_Graph_Vertex_new(sizeof(double), sizeof(double)));
-    
-    // Set the input values at the source vertices
-    ((double*) g->vertices->data[x]->data)[0] = 2.0;
-    ((double*) g->vertices->data[y]->data)[0] = 3.0;
-    
-    // Set up a new operator representing scalar multiplication
+    // Setup operators
     Differentiable_Operation* mul_op = Differentiable_Operation_new(scalar_mul_forward, scalar_mul_adjoint);
-    
-    // z = x*y
-    size_t e0 = AD_Graph_add_edge(g, AD_Graph_Edge_new(2, (size_t[]){x, y}, 1, (size_t[]){z}, mul_op));
 
-    // w = z*x
-    size_t e1 = AD_Graph_add_edge(g, AD_Graph_Edge_new(2, (size_t[]){z, x}, 1, (size_t[]){w}, mul_op));
-    
-    // Get the list of indices corresponding to source vertices and call forward
-    Index_Vector* sources = AD_Graph_sources(g);
-    AD_Graph_forward(g, sources);
-    
-    // Display values
-    double x_val = ((double*) g->vertices->data[x]->data)[0];
-    double y_val = ((double*) g->vertices->data[y]->data)[0];
-    double z_val = ((double*) g->vertices->data[z]->data)[0];
-    double w_val = ((double*) g->vertices->data[w]->data)[0];
-    
-    printf("==== FORWARD ====\n");
-    printf("x = %1.4f\n", x_val);
-    printf("y = %1.4f\n", y_val);
-    printf("z = x*y = %1.4f\n", z_val);
-    printf("w = z*x = %1.4f\n", w_val);
-    printf("\n");
-    
-    // Set the value of the derivative of function J w.r.t w at 0.5
-    ((double*) g->vertices->data[w]->grad)[0] = 0.5;
+    // Setup graph vertices
+    size_t x0_idx = AD_Graph_add_vertex(g, AD_Graph_Vertex_new(sizeof(double), sizeof(double), grad_buf_init_zeros));
+    size_t x1_idx = AD_Graph_add_vertex(g, AD_Graph_Vertex_new(sizeof(double), sizeof(double), grad_buf_init_zeros));
+    size_t x2_idx = AD_Graph_add_vertex(g, AD_Graph_Vertex_new(sizeof(double), sizeof(double), grad_buf_init_zeros));
+    size_t y0_idx = AD_Graph_add_vertex(g, AD_Graph_Vertex_new(sizeof(double), sizeof(double), grad_buf_init_zeros));
+    size_t y1_idx = AD_Graph_add_vertex(g, AD_Graph_Vertex_new(sizeof(double), sizeof(double), grad_buf_init_zeros));
+    size_t z_idx  = AD_Graph_add_vertex(g, AD_Graph_Vertex_new(sizeof(double), sizeof(double), grad_buf_init_zeros));
 
-    // Get the list of indices corresponding to sink vertices and call adjoint
-    Index_Vector* sinks = AD_Graph_sinks(g);
-    AD_Graph_adjoint(g, sinks);
+    // Setup graph edges to compute the following sequence of operations:
+    //  y0 = x0*x1
+    //  y1 = x1*x2
+    //  z  = y0*y1
+    size_t e0_idx = AD_Graph_add_edge(g, AD_Graph_Edge_new(2, (size_t[]){x0_idx, x1_idx}, 1, (size_t[]){y0_idx}, mul_op));
+    size_t e1_idx = AD_Graph_add_edge(g, AD_Graph_Edge_new(2, (size_t[]){x1_idx, x2_idx}, 1, (size_t[]){y1_idx}, mul_op));
+    size_t e2_idx = AD_Graph_add_edge(g, AD_Graph_Edge_new(2, (size_t[]){y0_idx, y1_idx}, 1, (size_t[]){z_idx}, mul_op));
 
-    double x_grad = ((double*) g->vertices->data[x]->grad)[0];
-    double y_grad = ((double*) g->vertices->data[x]->grad)[0];
-    double z_grad = ((double*) g->vertices->data[z]->grad)[0];
-    double w_grad = ((double*) g->vertices->data[w]->grad)[0];
+    AD_Graph_printf(g);
+    AD_Graph_Control_Flow* control_flow = AD_Graph_Control_Flow_new();
+    AD_Graph_Control_Flow_compute(g, control_flow);
 
-    printf("==== ADJOINT ====\n");
-    printf("dJ/dw = %1.4f\n", w_grad);
-    printf("dJ/dz = %1.4f\n", z_grad);
-    printf("dJ/dy = %1.4f\n", y_grad);
-    printf("dJ/dx = %1.4f\n", x_grad);
+    AD_Graph_execute(g, control_flow, FORWARD);
 
 }

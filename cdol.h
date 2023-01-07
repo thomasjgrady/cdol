@@ -24,7 +24,10 @@ typedef struct {
     void* grad;
 } AD_Graph_Vertex;
 
-AD_Graph_Vertex* AD_Graph_Vertex_new(size_t n_data_bytes, size_t n_grad_bytes);
+typedef void (*grad_buf_init_fn)(size_t, void*); // TODO: better interface for this
+void grad_buf_init_zeros(size_t n, void* ptr);
+
+AD_Graph_Vertex* AD_Graph_Vertex_new(size_t n_data_bytes, size_t n_grad_bytes, grad_buf_init_fn f);
 void AD_Graph_Vertex_free(AD_Graph_Vertex* v);
 
 typedef void (*AD_Function)(AD_Graph_Vertex**, AD_Graph_Vertex**);
@@ -46,6 +49,7 @@ AD_Graph_Edge* AD_Graph_Edge_new(size_t n_in, size_t* in, size_t n_out, size_t* 
 void AD_Graph_Edge_free(AD_Graph_Edge* e);
 
 VECTOR_DECL(AD_Graph_Vertex*, AD_Graph_Vertex_Ptr);
+VECTOR_DECL(AD_Graph_Vertex_Ptr_Vector*, AD_Graph_Vertex_Ptr_Vector);
 VECTOR_DECL(AD_Graph_Edge*, AD_Graph_Edge_Ptr);
 
 typedef struct {
@@ -55,14 +59,28 @@ typedef struct {
 
 AD_Graph* AD_Graph_new();
 void AD_Graph_free(AD_Graph* graph);
+void AD_Graph_printf(AD_Graph* graph);
 
 size_t AD_Graph_add_vertex(AD_Graph* graph, AD_Graph_Vertex* v);
 size_t AD_Graph_add_edge(AD_Graph* graph, AD_Graph_Edge* e);
 
-Index_Vector* AD_Graph_sources(AD_Graph* graph);
-Index_Vector* AD_Graph_sinks(AD_Graph* graph);
+typedef struct {
+    Index_Vector* sources;    // Vector of source nodes in the graph (used to input data)
+    Index_Vector* sinks;      // Vector of sink nodes in the graph   (used to read out data)
+    Index_Vector* edge_order; // Order in which the operations on edges are applied
+    AD_Graph_Vertex_Ptr_Vector_Vector* op_inputs;  // Input arguments to the edges in order
+    AD_Graph_Vertex_Ptr_Vector_Vector* op_outputs; // Output arguments to the edges in order
+} AD_Graph_Control_Flow;
 
-void AD_Graph_forward(AD_Graph* graph, Index_Vector* sources);
-void AD_Graph_adjoint(AD_Graph* graph, Index_Vector* sinks);
+AD_Graph_Control_Flow* AD_Graph_Control_Flow_new();
+void AD_Graph_Control_Flow_free(AD_Graph_Control_Flow* control_flow);
+void AD_Graph_Control_Flow_compute(AD_Graph* graph, AD_Graph_Control_Flow* control_flow);
+
+typedef enum {
+    FORWARD,
+    ADJOINT
+} AD_Graph_Execution_Mode;
+
+void AD_Graph_execute(AD_Graph* graph, AD_Graph_Control_Flow* control_flow, AD_Graph_Execution_Mode mode);
 
 #endif

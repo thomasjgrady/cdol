@@ -14,3 +14,4 @@ number of inputs and returning and arbitrary number of outputs.
 - [ ] MPI support through graph partitioning
 - [ ] Python interface
 - [ ] Amortization of compute control flow
+- [ ] Control flow operator support (if, while, etc)

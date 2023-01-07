@@ -1,5 +1,5 @@
 all:
-	cc -std=c11 -I . cdol.c main.c -g -o cdol_test.bin
+	cc -std=c99 -I . cdol.c main.c -g3 -o cdol_test.bin
 
 clean:
 	rm -fv cdol_test.bin

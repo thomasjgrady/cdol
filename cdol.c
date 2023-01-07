@@ -45,6 +45,7 @@
     }
 
 VECTOR_IMPL(AD_Graph_Vertex*, AD_Graph_Vertex_Ptr, true, AD_Graph_Vertex_free);
+VECTOR_IMPL(AD_Graph_Vertex_Ptr_Vector*, AD_Graph_Vertex_Ptr_Vector, true, AD_Graph_Vertex_Ptr_Vector_free);
 VECTOR_IMPL(AD_Graph_Edge*, AD_Graph_Edge_Ptr, true, AD_Graph_Edge_free);
 VECTOR_IMPL(size_t, Index, false, );
 
@@ -64,10 +65,17 @@ void Index_Vector_printf(Index_Vector* v) {
     printf("]\n}\n");
 }
 
-AD_Graph_Vertex* AD_Graph_Vertex_new(size_t n_data_bytes, size_t n_grad_bytes) {
+void grad_buf_init_zeros(size_t n, void* ptr) {
+    memset(ptr, 0, n);
+}
+
+AD_Graph_Vertex* AD_Graph_Vertex_new(size_t n_data_bytes, size_t n_grad_bytes, grad_buf_init_fn f) {
     AD_Graph_Vertex* v = malloc(sizeof(AD_Graph_Vertex));
     v->data = malloc(n_data_bytes);
     v->grad = n_grad_bytes > 0 ? malloc(n_grad_bytes) : NULL;
+    if (v->grad != NULL && f != NULL) {
+        f(n_grad_bytes, v->grad);
+    }
     return v;
 }
 
@@ -101,7 +109,6 @@ AD_Graph_Edge* AD_Graph_Edge_new(size_t n_in, size_t* in, size_t n_out, size_t* 
 void AD_Graph_Edge_free(AD_Graph_Edge* e) {
     Index_Vector_free(e->incoming);
     Index_Vector_free(e->outgoing);
-    free(e->op);
     free(e);
 }
 
@@ -118,6 +125,36 @@ void AD_Graph_free(AD_Graph* graph) {
     free(graph);
 }
 
+void AD_Graph_printf(AD_Graph* graph) {
+    printf("AD_Graph {\n");
+    printf("\tNumber of vertices = %lu\n", graph->vertices->length);
+    printf("\tEdges = [\n");
+    AD_Graph_Edge* edge;
+    for (size_t i = 0; i < graph->edges->length; i++) {
+        edge = graph->edges->data[i];
+        printf("\t\t[");
+        for (size_t j = 0; j < edge->incoming->length; j++) {
+            if (j < edge->incoming->length-1) {
+                printf("%lu, ", edge->incoming->data[j]);
+            }
+            else {
+                printf("%lu", edge->incoming->data[j]);
+            }
+        }
+        printf("] ---{ op: %p }---> [", edge->op->forward);
+        for (size_t j = 0; j < edge->outgoing->length; j++) {
+            if (j < edge->outgoing->length-1) {
+                printf("%lu, ", edge->outgoing->data[j]);
+            }
+            else {
+                printf("%lu", edge->outgoing->data[j]);
+            }
+        }
+        printf("]\n");
+    }
+    printf("\t]\n}\n");
+}
+
 size_t AD_Graph_add_vertex(AD_Graph* graph, AD_Graph_Vertex* v) {
     AD_Graph_Vertex_Ptr_Vector_push(graph->vertices, v);
     return graph->vertices->length-1;
@@ -128,286 +165,60 @@ size_t AD_Graph_add_edge(AD_Graph* graph, AD_Graph_Edge* e) {
     return graph->edges->length-1;
 }
 
-Index_Vector* AD_Graph_sources(AD_Graph* graph) {
-
-    // Create a temporary array to store incoming counts for each vertex
-    size_t* incoming_counts = calloc(graph->vertices->length, sizeof(size_t));
-
-    // Loop over each edge and and add 1 to each vertex in the outgoing section
-    AD_Graph_Edge* e;
-    for (size_t i = 0; i < graph->edges->length; i++) {
-        e = graph->edges->data[i];
-        for (size_t j = 0; j < e->outgoing->length; j++) {
-            incoming_counts[e->outgoing->data[j]]++;
-        }
-    }
-
-    // Collect pointers to all vertices with zero incoming edges
-    Index_Vector* v = Index_Vector_new(16);
-    for (size_t i = 0; i < graph->vertices->length; i++) {
-        if (incoming_counts[i] == 0) {
-            Index_Vector_push(v, i);
-        }
-    }
-
-    // Free temporary array
-    free(incoming_counts);
-
-    return v;
+AD_Graph_Control_Flow* AD_Graph_Control_Flow_new() {
+    AD_Graph_Control_Flow* control_flow = malloc(sizeof(AD_Graph_Control_Flow));
+    control_flow->sources = Index_Vector_new(16);
+    control_flow->sinks   = Index_Vector_new(16);
+    control_flow->edge_order = Index_Vector_new(64);
+    control_flow->op_inputs  = AD_Graph_Vertex_Ptr_Vector_Vector_new(64);
+    control_flow->op_outputs = AD_Graph_Vertex_Ptr_Vector_Vector_new(64);
+    return control_flow;
 }
 
-Index_Vector* AD_Graph_sinks(AD_Graph* graph) {
+void AD_Graph_Control_Flow_free(AD_Graph_Control_Flow* control_flow) {
+    Index_Vector_free(control_flow->sources); 
+    Index_Vector_free(control_flow->sinks); 
+    Index_Vector_free(control_flow->edge_order);
 
-    // Create a temporary array to store incoming counts for each vertex
-    size_t* outgoing_counts = calloc(graph->vertices->length, sizeof(size_t));
-
-    // Loop over each edge and and add 1 to each vertex in the incoming section
-    AD_Graph_Edge* e;
-    for (size_t i = 0; i < graph->edges->length; i++) {
-        e = graph->edges->data[i];
-        for (size_t j = 0; j < e->incoming->length; j++) {
-            outgoing_counts[e->incoming->data[j]]++;
-        }
+    // Only shallow free here because the pointers are shared with the underlying
+    // graph
+    for (size_t i = 0; i < control_flow->op_inputs->length; i++) {
+        AD_Graph_Vertex_Ptr_Vector_free_shallow(control_flow->op_inputs->data[i]);
     }
-
-    // Collect pointers to all vertices with zero outgoing edges
-    Index_Vector* v = Index_Vector_new(16);
-    for (size_t i = 0; i < graph->vertices->length; i++) {
-        if (outgoing_counts[i] == 0) {
-            Index_Vector_push(v, i);
-        }
+    for (size_t i = 0; i < control_flow->op_outputs->length; i++) {
+        AD_Graph_Vertex_Ptr_Vector_free_shallow(control_flow->op_outputs->data[i]);
     }
-
-    // Free temporary array
-    free(outgoing_counts);
-
-    return v;
+    AD_Graph_Vertex_Ptr_Vector_Vector_free_shallow(control_flow->op_inputs);
+    AD_Graph_Vertex_Ptr_Vector_Vector_free_shallow(control_flow->op_outputs);
+    free(control_flow);
 }
 
-void AD_Graph_forward(AD_Graph* graph, Index_Vector* sources) {
-
-    // TODO: move most of this to a separate function to allow computation of
-    // control flow to be amortized as an upfront cost
-    
-    // Local variables for convenience
-    AD_Graph_Edge* edge;
-
-    // Allocate a table which keeps track of the number of outgoing edges from
-    // each vertex who's associated operation has been called. The count for
-    // each vertex should reach zero when computation is finished
-    size_t* outgoing_counts = calloc(graph->vertices->length, sizeof(size_t));
-    for (size_t i = 0; i < graph->edges->length; i++) {
-        edge = graph->edges->data[i];
-        for (size_t j = 0; j < edge->incoming->length; j++) {
-            outgoing_counts[edge->incoming->data[j]]++;
-        }
-    }
-
-    // Allocate a table of booleans to indicate whether a particular vertex
-    // is in the frontier set
-    bool* in_frontier = calloc(graph->vertices->length, sizeof(size_t));
-    for (size_t i = 0; i < sources->length; i++) {
-        in_frontier[sources->data[i]] = true;
-    }
-    
-    // Allocate vector to hold currently selected edges
-    Index_Vector* selected_edges = Index_Vector_new(16);
-    
-    // Allocate vectors to hold input/output vertices
-    AD_Graph_Vertex_Ptr_Vector* input_vertices  = AD_Graph_Vertex_Ptr_Vector_new(16);
-    AD_Graph_Vertex_Ptr_Vector* output_vertices = AD_Graph_Vertex_Ptr_Vector_new(16);
-    
-    // Run computation
-    while (true) {
-
-        // Select edges for which all of their incoming vertices are in the
-        // frontier set
-        Index_Vector_clear(selected_edges);
-        for (size_t i = 0; i < graph->edges->length; i++) {
-            edge = graph->edges->data[i];
-            bool all_in_frontier = true;
-            for (size_t j = 0; j < edge->incoming->length; j++) {
-                all_in_frontier &= in_frontier[edge->incoming->data[j]];
-            }
-
-            if (all_in_frontier) {
-                Index_Vector_push(selected_edges, i);
-            }
-        }
-
-        // If there were no selected edges, computation is finished
-        if (selected_edges->length == 0) {
-            break;
-        }
-
-        // For each of the selected edges, assemble a vector of input/output
-        // vertices and run the computation. After computation, decrement the
-        // counter corresponding to the incoming vertices
-        for (size_t i = 0; i < selected_edges->length; i++) {
-            
-            edge = graph->edges->data[selected_edges->data[i]];
-
-            AD_Graph_Vertex_Ptr_Vector_clear(input_vertices);
-            for (size_t j = 0; j < edge->incoming->length; j++) {
-                AD_Graph_Vertex_Ptr_Vector_push(
-                        input_vertices, 
-                        graph->vertices->data[edge->incoming->data[j]]
-                );
-            }
-
-            AD_Graph_Vertex_Ptr_Vector_clear(output_vertices);
-            for (size_t j = 0; j < edge->outgoing->length; j++) {
-                AD_Graph_Vertex_Ptr_Vector_push(
-                        output_vertices, 
-                        graph->vertices->data[edge->outgoing->data[j]]
-                );
-            }
-
-            edge->op->forward(input_vertices->data, output_vertices->data);
-
-            for (size_t j = 0; j < edge->incoming->length; j++) {
-                outgoing_counts[edge->incoming->data[j]]--;
-            }
-        }
-        
-        // Update the froniter array using selected edges and outgoing counts
-        for (size_t i = 0; i < selected_edges->length; i++) {
-            edge = graph->edges->data[selected_edges->data[i]];
-
-            for (size_t j = 0; j < edge->incoming->length; j++) {
-                if (outgoing_counts[edge->incoming->data[j]] == 0) {
-                    in_frontier[edge->incoming->data[j]] = false;
-                }
-            }
-
-            for (size_t j = 0; j < edge->outgoing->length; j++) {
-                in_frontier[edge->outgoing->data[j]] = true;
-            }
-        }
-    }
-    
-    // Shallow free here because the AD_Graph_Vertex pointers are shared by the
-    // underlying graph itself
-    AD_Graph_Vertex_Ptr_Vector_free_shallow(output_vertices);
-    AD_Graph_Vertex_Ptr_Vector_free_shallow(input_vertices);
-
-    Index_Vector_free(selected_edges);
-
-    free(in_frontier);
-    free(outgoing_counts);
-
+void AD_Graph_Control_Flow_compute(AD_Graph* graph, AD_Graph_Control_Flow* control_flow) {
+    // TODO
 }
 
-void AD_Graph_adjoint(AD_Graph* graph, Index_Vector* sinks) {
-
-    // TODO: move most of this to a separate function to allow computation of
-    // control flow to be amortized as an upfront cost
-    
-    // Local variables for convenience
-    AD_Graph_Edge* edge;
-
-    // Allocate a table which keeps track of the number of incoming edges from
-    // each vertex who's associated adjoint operation has been called. The count
-    // for each vertex should reach zero when computation is finished
-    size_t* incoming_counts = calloc(graph->vertices->length, sizeof(size_t));
-    for (size_t i = 0; i < graph->edges->length; i++) {
-        edge = graph->edges->data[i];
-        for (size_t j = 0; j < edge->outgoing->length; j++) {
-            incoming_counts[edge->outgoing->data[j]]++;
+void AD_Graph_execute(AD_Graph* graph, AD_Graph_Control_Flow* control_flow, AD_Graph_Execution_Mode mode) {
+    if (mode == FORWARD) {
+        AD_Graph_Edge* edge;
+        AD_Graph_Vertex_Ptr_Vector* input;
+        AD_Graph_Vertex_Ptr_Vector* output;
+        for (size_t i = 0; i < control_flow->edge_order->length; i++) {
+            edge = graph->edges->data[control_flow->edge_order->data[i]];
+            input = control_flow->op_inputs->data[i];
+            output = control_flow->op_outputs->data[i];
+            edge->op->forward(input->data, output->data);
         }
     }
-
-    // Allocate a table of booleans to indicate whether a particular vertex
-    // is in the frontier set
-    bool* in_frontier = calloc(graph->vertices->length, sizeof(size_t));
-    for (size_t i = 0; i < sinks->length; i++) {
-        in_frontier[sinks->data[i]] = true;
-    }
-    
-    // Allocate vector to hold currently selected edges
-    Index_Vector* selected_edges = Index_Vector_new(16);
-    
-    // Allocate vectors to hold input/output vertices
-    AD_Graph_Vertex_Ptr_Vector* input_vertices  = AD_Graph_Vertex_Ptr_Vector_new(16);
-    AD_Graph_Vertex_Ptr_Vector* output_vertices = AD_Graph_Vertex_Ptr_Vector_new(16);
-    
-    // Run computation
-    while (true) {
-
-        // Select edges for which all of their incoming vertices are in the
-        // frontier set
-        Index_Vector_clear(selected_edges);
-        for (size_t i = 0; i < graph->edges->length; i++) {
-            edge = graph->edges->data[i];
-            bool all_in_frontier = true;
-            for (size_t j = 0; j < edge->outgoing->length; j++) {
-                all_in_frontier &= in_frontier[edge->outgoing->data[j]];
-            }
-
-            if (all_in_frontier) {
-                Index_Vector_push(selected_edges, i);
-            }
-        }
-
-        // If there were no selected edges, computation is finished
-        if (selected_edges->length == 0) {
-            break;
-        }
-
-        // For each of the selected edges, assemble a vector of input/output
-        // vertices and run the computation. After computation, decrement the
-        // counter corresponding to the outgoing vertices
-        for (size_t i = 0; i < selected_edges->length; i++) {
-            
-            edge = graph->edges->data[selected_edges->data[i]];
-
-            AD_Graph_Vertex_Ptr_Vector_clear(input_vertices);
-            for (size_t j = 0; j < edge->incoming->length; j++) {
-                AD_Graph_Vertex_Ptr_Vector_push(
-                        input_vertices, 
-                        graph->vertices->data[edge->incoming->data[j]]
-                );
-            }
-
-            AD_Graph_Vertex_Ptr_Vector_clear(output_vertices);
-            for (size_t j = 0; j < edge->outgoing->length; j++) {
-                AD_Graph_Vertex_Ptr_Vector_push(
-                        output_vertices, 
-                        graph->vertices->data[edge->outgoing->data[j]]
-                );
-            }
-
-            edge->op->adjoint(input_vertices->data, output_vertices->data);
-
-            for (size_t j = 0; j < edge->outgoing->length; j++) {
-                incoming_counts[edge->outgoing->data[j]]--;
-            }
-        }
-        
-        // Update the froniter array using selected edges and incoming counts
-        for (size_t i = 0; i < selected_edges->length; i++) {
-            edge = graph->edges->data[selected_edges->data[i]];
-
-            for (size_t j = 0; j < edge->outgoing->length; j++) {
-                if (incoming_counts[edge->outgoing->data[j]] == 0) {
-                    in_frontier[edge->outgoing->data[j]] = false;
-                }
-            }
-
-            for (size_t j = 0; j < edge->incoming->length; j++) {
-                in_frontier[edge->incoming->data[j]] = true;
-            }
+    else {
+        AD_Graph_Edge* edge;
+        AD_Graph_Vertex_Ptr_Vector* input;
+        AD_Graph_Vertex_Ptr_Vector* output;
+        for (size_t i = control_flow->edge_order->length; i-- > 0;) {
+            edge = graph->edges->data[control_flow->edge_order->data[i]];
+            input = control_flow->op_inputs->data[i];
+            output = control_flow->op_outputs->data[i];
+            edge->op->adjoint(input->data, output->data);
         }
     }
-    
-    // Shallow free here because the AD_Graph_Vertex pointers are shared by the
-    // underlying graph itself
-    AD_Graph_Vertex_Ptr_Vector_free_shallow(output_vertices);
-    AD_Graph_Vertex_Ptr_Vector_free_shallow(input_vertices);
-
-    Index_Vector_free(selected_edges);
-
-    free(in_frontier);
-    free(incoming_counts);
-
 }
+
