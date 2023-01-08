@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "cdol.h"
+#include "libcdol.h"
 
 #define VECTOR_IMPL(T, name_prefix, free_elements, free_func) \
     name_prefix##_Vector* name_prefix##_Vector_new(size_t default_capacity) { \

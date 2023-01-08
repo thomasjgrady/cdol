@@ -15,3 +15,4 @@ number of inputs and returning and arbitrary number of outputs.
 - [ ] Python interface
 - [x] Amortization of compute control flow
 - [ ] Control flow operator support (if, while, etc)
+- [ ] Gradient initialization API

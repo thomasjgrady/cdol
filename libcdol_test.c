@@ -1,6 +1,6 @@
 #include <stdio.h>
 
-#include "cdol.h"
+#include "libcdol.h"
 
 void scalar_mul_forward(AD_Graph_Vertex** input, AD_Graph_Vertex** output) {
     double* x0 = (double*) input[0]->data;
@@ -13,7 +13,6 @@ void scalar_mul_adjoint(AD_Graph_Vertex** input, AD_Graph_Vertex** output) {
 
     double* x0  = (double*) input[0]->data;
     double* x1  = (double*) input[1]->data;
-    double* y   = (double*) output[0]->data;
     double* dx0 = (double*) input[0]->grad;
     double* dx1 = (double*) input[1]->grad;
     double* dy  = (double*) output[0]->grad;

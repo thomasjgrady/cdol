@@ -1,4 +1,5 @@
 *.bin
 *.out
 *.dSYM
+*.so
 compile_flags.txt
