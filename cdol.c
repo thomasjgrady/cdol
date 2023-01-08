@@ -176,6 +176,7 @@ AD_Graph_Control_Flow* AD_Graph_Control_Flow_new() {
 }
 
 void AD_Graph_Control_Flow_free(AD_Graph_Control_Flow* control_flow) {
+
     Index_Vector_free(control_flow->sources); 
     Index_Vector_free(control_flow->sinks); 
     Index_Vector_free(control_flow->edge_order);
@@ -193,19 +194,42 @@ void AD_Graph_Control_Flow_free(AD_Graph_Control_Flow* control_flow) {
     free(control_flow);
 }
 
+/* 
+ * Serializes the graph into a list of edges and their corresponding
+ * input/outputs nodes. This list can then be iterated over and the
+ * function at each edge applied to perform forward computation, and the
+ * reverse done to perform adjoint computation.
+ *
+ * TODO: Cycle detection. Not all graphs are valid. Should this be up to the
+ *  user to validate before calling this function?
+ *
+ * TODO: Control flow support. E.g. change the control_flow structure to allow
+ *  for some kind of simple branching logic when it is used. This is very
+ *  complicated, so I will ignore it for now :).
+ *
+ * TODO: Heuristics on which edges should be added in what order. Maybe some
+ *  kind of BFS-type metric would be good? When introducing pipeline parallelism
+ *  through graph cuts, it is likely going to be more efficient to have
+ *  breadth-first execution patterns (though I have no evidence for this
+ *  currently, just speculation).
+ */
 void AD_Graph_Control_Flow_compute(AD_Graph* graph, AD_Graph_Control_Flow* control_flow) {
 
     Index_Vector_clear(control_flow->sources);
     Index_Vector_clear(control_flow->sinks);
     Index_Vector_clear(control_flow->edge_order);
 
-    // TODO: this leaks memory if the function is called on the same control_flow
+    // TODO: Leaks memory if this function is called on the same control_flow
     // input more than once!
     AD_Graph_Vertex_Ptr_Vector_Vector_clear(control_flow->op_inputs);
     AD_Graph_Vertex_Ptr_Vector_Vector_clear(control_flow->op_outputs);
 
     AD_Graph_Edge* edge;
-
+    
+    // Count the in/out degree of each vertex using connectivity information.
+    // The out degree buffer is also used to keep track of which functions
+    // have been serialized into the control_flow structure, thereby informing
+    // whether a particular vertex should remain in the frontier set.
     size_t* vertex_degree_in  = calloc(graph->vertices->length, sizeof(size_t));
     size_t* vertex_degree_out = calloc(graph->vertices->length, sizeof(size_t));
 
@@ -218,7 +242,9 @@ void AD_Graph_Control_Flow_compute(AD_Graph* graph, AD_Graph_Control_Flow* contr
             vertex_degree_out[edge->incoming->data[j]]++;
         }
     }
-
+    
+    // Set up the sources/sinks in the control_flow structure to be vertices in
+    // the graph whose in/out degrees are zero respectively.
     for (size_t i = 0; i < graph->vertices->length; i++) {
         if (vertex_degree_in[i] == 0) {
             Index_Vector_push(control_flow->sources, i);
@@ -227,18 +253,22 @@ void AD_Graph_Control_Flow_compute(AD_Graph* graph, AD_Graph_Control_Flow* contr
             Index_Vector_push(control_flow->sinks, i);
         }
     }
-
+    
+    // Initialize the frontier set with all sources.
+    // TODO: Change this from an O(|V|) array to something else. In large graphs
+    // this becomes memory intensive.
     bool* in_frontier = calloc(graph->vertices->length, sizeof(size_t));
     for (size_t i = 0; i < control_flow->sources->length; i++) {
         in_frontier[control_flow->sources->data[i]] = true;
     }
 
     Index_Vector* selected_edges = Index_Vector_new(16);
-
-    while (true) {
+    
+    // Iterate until we have selected all edges
+    while (control_flow->edge_order->length < graph->edges->length) {
         
+        // Select all edges whose inputs are entirely within the frontier set.
         Index_Vector_clear(selected_edges);
-
         for (size_t i = 0; i < graph->edges->length; i++) {
             edge = graph->edges->data[i];
             bool all_in_frontier = true;
@@ -251,15 +281,14 @@ void AD_Graph_Control_Flow_compute(AD_Graph* graph, AD_Graph_Control_Flow* contr
             }
         }
         
-        if (selected_edges->length == 0) {
-            break;
-        }
-
         for (size_t i = 0; i < selected_edges->length; i++) {
-            Index_Vector_push(control_flow->edge_order, selected_edges->data[i]);
 
+            Index_Vector_push(control_flow->edge_order, selected_edges->data[i]);
             edge = graph->edges->data[selected_edges->data[i]];
             
+            // Get the input arguments to the function associated with the
+            // current edge, and decrement to the function call counter corresponding
+            // to each argument by 1.
             AD_Graph_Vertex_Ptr_Vector* inputs = AD_Graph_Vertex_Ptr_Vector_new(edge->incoming->length);
             for (size_t j = 0; j < edge->incoming->length; j++) {
                 size_t inc_idx = edge->incoming->data[j];
@@ -269,7 +298,8 @@ void AD_Graph_Control_Flow_compute(AD_Graph* graph, AD_Graph_Control_Flow* contr
                     in_frontier[inc_idx] = false;
                 }
             }
-
+            
+            // Get the output arguments to the function associated with the current edge
             AD_Graph_Vertex_Ptr_Vector* outputs = AD_Graph_Vertex_Ptr_Vector_new(edge->outgoing->length);
             for (size_t j = 0; j < edge->outgoing->length; j++) {
                 in_frontier[edge->outgoing->data[j]] = true;
@@ -311,4 +341,3 @@ void AD_Graph_execute(AD_Graph* graph, AD_Graph_Control_Flow* control_flow, AD_G
         }
     }
 }
-

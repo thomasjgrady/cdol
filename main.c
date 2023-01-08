@@ -58,26 +58,42 @@ int main(void) {
     ((double*) g->vertices->data[x1_idx]->data)[0] = 3.0;
     ((double*) g->vertices->data[x2_idx]->data)[0] = 4.0;
 
+    printf("==== Graph ====\n");
     AD_Graph_printf(g);
+    printf("\n");
 
     // Setup control flow
     AD_Graph_Control_Flow* control_flow = AD_Graph_Control_Flow_new();
     AD_Graph_Control_Flow_compute(g, control_flow);
-
+    
+    printf("==== Control Flow ====\n");
     printf("sources:    "); Index_Vector_printf(control_flow->sources);
     printf("sinks:      "); Index_Vector_printf(control_flow->sinks);
     printf("edge order: "); Index_Vector_printf(control_flow->edge_order);
+    printf("\n");
     
     // Run forward computation
     AD_Graph_execute(g, control_flow, FORWARD);
-    printf("z = %1.4f\n", ((double*) g->vertices->data[z_idx]->data)[0]);
+
+    printf("==== Forward ====\n");
+    printf("x0 = %1.4f\n", ((double*) g->vertices->data[x0_idx]->data)[0]);
+    printf("x1 = %1.4f\n", ((double*) g->vertices->data[x1_idx]->data)[0]);
+    printf("x2 = %1.4f\n", ((double*) g->vertices->data[x2_idx]->data)[0]);
+    printf("y0 = %1.4f\n", ((double*) g->vertices->data[y0_idx]->data)[0]);
+    printf("y1 = %1.4f\n", ((double*) g->vertices->data[y1_idx]->data)[0]);
+    printf("z  = %1.4f\n", ((double*) g->vertices->data[z_idx]->data)[0]);
+    printf("\n");
 
     // Set gradient with some data
     ((double*) g->vertices->data[z_idx]->grad)[0] = 0.01;
 
     // Run adjoint computation
     AD_Graph_execute(g, control_flow, ADJOINT);
+
+    printf("==== Adjoint ====\n");
     printf("dJ/dz  = %1.4f\n", ((double*) g->vertices->data[z_idx]->grad)[0]);
+    printf("dJ/dy0 = %1.4f\n", ((double*) g->vertices->data[y0_idx]->grad)[0]);
+    printf("dJ/dy1 = %1.4f\n", ((double*) g->vertices->data[y1_idx]->grad)[0]);
     printf("dJ/dx0 = %1.4f\n", ((double*) g->vertices->data[x0_idx]->grad)[0]);
     printf("dJ/dx1 = %1.4f\n", ((double*) g->vertices->data[x1_idx]->grad)[0]);
     printf("dJ/dx2 = %1.4f\n", ((double*) g->vertices->data[x2_idx]->grad)[0]);
