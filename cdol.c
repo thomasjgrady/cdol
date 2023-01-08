@@ -97,7 +97,7 @@ Differentiable_Operation* Differentiable_Operation_new(AD_Function forward, AD_F
 AD_Graph_Edge* AD_Graph_Edge_new(size_t n_in, size_t* in, size_t n_out, size_t* out, Differentiable_Operation* op) {
     AD_Graph_Edge* e = malloc(sizeof(AD_Graph_Edge));
     e->incoming = Index_Vector_new(n_in);
-    e->outgoing = Index_Vector_new(n_in);
+    e->outgoing = Index_Vector_new(n_out);
     memcpy(e->incoming->data, in, n_in*sizeof(size_t));
     memcpy(e->outgoing->data, out, n_out*sizeof(size_t));
     e->incoming->length = n_in;
@@ -194,7 +194,97 @@ void AD_Graph_Control_Flow_free(AD_Graph_Control_Flow* control_flow) {
 }
 
 void AD_Graph_Control_Flow_compute(AD_Graph* graph, AD_Graph_Control_Flow* control_flow) {
-    // TODO
+
+    Index_Vector_clear(control_flow->sources);
+    Index_Vector_clear(control_flow->sinks);
+    Index_Vector_clear(control_flow->edge_order);
+
+    // TODO: this leaks memory if the function is called on the same control_flow
+    // input more than once!
+    AD_Graph_Vertex_Ptr_Vector_Vector_clear(control_flow->op_inputs);
+    AD_Graph_Vertex_Ptr_Vector_Vector_clear(control_flow->op_outputs);
+
+    AD_Graph_Edge* edge;
+
+    size_t* vertex_degree_in  = calloc(graph->vertices->length, sizeof(size_t));
+    size_t* vertex_degree_out = calloc(graph->vertices->length, sizeof(size_t));
+
+    for (size_t i = 0; i < graph->edges->length; i++) {
+        edge = graph->edges->data[i];
+        for (size_t j = 0; j < edge->outgoing->length; j++) {
+            vertex_degree_in[edge->outgoing->data[j]]++;
+        }
+        for (size_t j = 0; j < edge->incoming->length; j++) {
+            vertex_degree_out[edge->incoming->data[j]]++;
+        }
+    }
+
+    for (size_t i = 0; i < graph->vertices->length; i++) {
+        if (vertex_degree_in[i] == 0) {
+            Index_Vector_push(control_flow->sources, i);
+        }
+        if (vertex_degree_out[i] == 0) {
+            Index_Vector_push(control_flow->sinks, i);
+        }
+    }
+
+    bool* in_frontier = calloc(graph->vertices->length, sizeof(size_t));
+    for (size_t i = 0; i < control_flow->sources->length; i++) {
+        in_frontier[control_flow->sources->data[i]] = true;
+    }
+
+    Index_Vector* selected_edges = Index_Vector_new(16);
+
+    while (true) {
+        
+        Index_Vector_clear(selected_edges);
+
+        for (size_t i = 0; i < graph->edges->length; i++) {
+            edge = graph->edges->data[i];
+            bool all_in_frontier = true;
+            for (size_t i = 0; i < edge->incoming->length; i++) {
+                all_in_frontier &= in_frontier[edge->incoming->data[i]];
+            }
+
+            if (all_in_frontier) {
+                Index_Vector_push(selected_edges, i);
+            }
+        }
+        
+        if (selected_edges->length == 0) {
+            break;
+        }
+
+        for (size_t i = 0; i < selected_edges->length; i++) {
+            Index_Vector_push(control_flow->edge_order, selected_edges->data[i]);
+
+            edge = graph->edges->data[selected_edges->data[i]];
+            
+            AD_Graph_Vertex_Ptr_Vector* inputs = AD_Graph_Vertex_Ptr_Vector_new(edge->incoming->length);
+            for (size_t j = 0; j < edge->incoming->length; j++) {
+                size_t inc_idx = edge->incoming->data[j];
+                vertex_degree_out[inc_idx]--;
+                AD_Graph_Vertex_Ptr_Vector_push(inputs, graph->vertices->data[inc_idx]);
+                if (vertex_degree_out[inc_idx] == 0) {
+                    in_frontier[inc_idx] = false;
+                }
+            }
+
+            AD_Graph_Vertex_Ptr_Vector* outputs = AD_Graph_Vertex_Ptr_Vector_new(edge->outgoing->length);
+            for (size_t j = 0; j < edge->outgoing->length; j++) {
+                in_frontier[edge->outgoing->data[j]] = true;
+                AD_Graph_Vertex_Ptr_Vector_push(outputs, graph->vertices->data[edge->outgoing->data[j]]);
+            }
+
+            AD_Graph_Vertex_Ptr_Vector_Vector_push(control_flow->op_inputs, inputs);
+            AD_Graph_Vertex_Ptr_Vector_Vector_push(control_flow->op_outputs, outputs);
+        }
+    }
+
+    Index_Vector_free(selected_edges);
+    free(in_frontier);
+    free(vertex_degree_out);
+    free(vertex_degree_in);
 }
 
 void AD_Graph_execute(AD_Graph* graph, AD_Graph_Control_Flow* control_flow, AD_Graph_Execution_Mode mode) {

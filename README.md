@@ -13,5 +13,5 @@ number of inputs and returning and arbitrary number of outputs.
 - [ ] Representation of graph in vertex API (i.e. recursive graph execution)
 - [ ] MPI support through graph partitioning
 - [ ] Python interface
-- [ ] Amortization of compute control flow
+- [x] Amortization of compute control flow
 - [ ] Control flow operator support (if, while, etc)
